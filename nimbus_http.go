@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -139,7 +138,6 @@ func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
 	defer uploaded.Close()
 
 	fExt := filepath.Ext(hdr.Filename)
-	log.Println(fExt)
 	if err := n.isExtAllowed(fExt); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
