@@ -1,5 +1,7 @@
 # Nimbus
 
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/navaz-alani/nimbus)](https://pkg.go.dev/github.com/navaz-alani/nimbus)
+
 This is a simple fileserver, written in Go, which facilitates uploading and
 downloading of files. For examples of how this software works, check out the
 `examples` directory in the project root.
