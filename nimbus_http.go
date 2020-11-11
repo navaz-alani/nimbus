@@ -52,8 +52,8 @@ func (n *NimbusHTTPFormImpl) Cleanup() {
 }
 
 func (n *NimbusHTTPFormImpl) tmpFilePath(name string) string {
-  // no need to acquire mutex since `tmpDir` never changes
-  return fmt.Sprintf("%s/%s", n.tmpDir, name)
+	// no need to acquire mutex since `tmpDir` never changes
+	return fmt.Sprintf("%s/%s", n.tmpDir, name)
 }
 
 // write is a helper which writes the contents of the file `f` to the writer `w`
@@ -96,9 +96,9 @@ func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
 		fExt = hdr.Filename[lastDotIdx:]
 	}
 
-  n.mu.RLock()
+	n.mu.RLock()
 	tempFile, err := ioutil.TempFile(n.tmpDir, fmt.Sprintf("*%s", fExt))
-  n.mu.RUnlock()
+	n.mu.RUnlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -126,9 +126,10 @@ func (n *NimbusHTTPFormImpl) Download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected file name", http.StatusBadRequest)
 		return
 	}
-	f, err := os.Open(n.tmpFilePath(files[0]))
+	fName := path.Base(files[0]) // so that `tmpDir` cannot be escaped
+	f, err := os.Open(n.tmpFilePath(fName))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("cannot open: %s", fName), http.StatusBadRequest)
 		return
 	}
 	// set headers as they were when the file was uploaded (obtain mu for reading)
@@ -138,7 +139,7 @@ func (n *NimbusHTTPFormImpl) Download(w http.ResponseWriter, r *http.Request) {
 	}
 	n.mu.RUnlock()
 	if err := write(f, w, n.tBuffSize); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("cannot write: %s", fName), http.StatusInternalServerError)
 		return
 	}
 }
@@ -157,12 +158,13 @@ func (n *NimbusHTTPFormImpl) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected file name", http.StatusBadRequest)
 		return
 	}
-	err := os.Remove(n.tmpFilePath(files[0]))
+	fName := path.Base(files[0])
+	err := os.Remove(n.tmpFilePath(fName))
 	if err != nil {
-    http.Error(w, "failed to delete file: " + err.Error(), http.StatusBadRequest)
+		http.Error(w, "failed to delete file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-  n.mu.Lock()
-  delete(n.mimeCache, files[0])
-  n.mu.Unlock()
+	n.mu.Lock()
+	delete(n.mimeCache, files[0])
+	n.mu.Unlock()
 }
