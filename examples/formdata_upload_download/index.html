@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Upload Files!</title>
+</head>
+<body>
+  <div>
+    <form enctype="multipart/form-data">
+      <input id="file-upload" type="file" name="_file_"/>
+      <button id="upload">Submit</button>
+    </form>
+    <div id="uploaded">
+    </div>
+  </div>
+  <script>
+    let fileUpload = document.getElementById("file-upload");
+    let uploadedFiles = document.getElementById("uploaded");
+
+    document.getElementById("upload").onclick = function(e) {
+      e.preventDefault();
+      // check if there are any files to upload
+      if (fileUpload.files.length === 0) {
+        alert("Please chose a file to upload");
+        return;
+      }
+      // populate formdata object with file selected
+      let fd = new FormData();
+      fd.append("_file_", fileUpload.files[0]);
+      // send formdata object to backend and handle outcome
+      fetch("/upload", {
+        method: "POST",
+        body: fd,
+      })
+      .then(async (resp) => {
+        let newUpload = document.createElement("p");
+        let respTxt = await resp.text();
+        let href = `/download?_file_=${respTxt}`;
+
+        if (resp.status != 200) {
+          alert(`An error occurred. Server says:\n${respTxt}`);
+          return;
+        }
+
+        newUpload.innerHTML = `
+        ${fileUpload.files[0].name} ->
+          <a target="_blank" href=${href}>${respTxt}</a>
+        `;
+        uploadedFiles.appendChild(newUpload);
+      })
+      .catch(async (e) => {
+        alert(`An unexpected error occurred: ${e}`);
+      });
+    };
+  </script>
+</body>
+</html>
