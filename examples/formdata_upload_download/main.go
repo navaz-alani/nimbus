@@ -11,11 +11,13 @@ import (
 )
 
 func main() {
-	// HTTP Form file server, with 10mb max file size & 256 byte copy buffer
+	// HTTP Form file server, with 10mb max file size & 256 byte copy buffer,
+	// allowing image files with and not files without extensions.
 	impl, _ := nimbus.NewHTTPFormImpl("_file_",
 		nimbus.Mb10,
 		nimbus.DefaultTransferBuffSize,
-		"examples/formdata_upload_download/.nimbus_tmp")
+		"examples/formdata_upload_download/.nimbus_tmp",
+		nimbus.ExtImg, false)
 	// handle ctrl+c and cleanup since defered cleanup call won't be run
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)

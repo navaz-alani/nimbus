@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path"
-	"strings"
+	"path/filepath"
 	"sync"
 )
 
@@ -17,15 +18,33 @@ const (
 	Mb10                    = (10 << 20)
 )
 
+// Extension sets
+var (
+	// Set of extension indicating that all extensions should be allowed.
+	ExtAll = []string{"_all_"}
+	// Set of image extensions which are most commonly used on the web.
+	// From: developer.mozilla.org/en-US/docs/Web/Media/Formats/Image_types
+	ExtImg = []string{
+		".apng", ".avif", ".gif", ".jpg", ".jpeg", ".jfif",
+		".pjpeg", ".pjp", ".png", ".svg", ".webp", ".bmp",
+	}
+	// Set of extensions only allowing compressed files
+	ExtComp = []string{".zip", ".tar", ".tgz", ".gz", ".bz2"}
+	// Set of extensions only allowing text files
+	ExtTxt = []string{".txt"}
+)
+
 // NimbusHTTPFormImpl is a NimbusHTTP implementation which handles file uploads
 // performed using HTML forms or the FormData web API.
 type NimbusHTTPFormImpl struct {
-	mu        sync.RWMutex
-	maxSize   int64
-	tBuffSize int64
-	dfk       string
-	mimeCache map[string][]string
-	tmpDir    string
+	mu                sync.RWMutex
+	maxSize           int64
+	tBuffSize         int64
+	dfk               string
+	mimeCache         map[string][]string
+	tmpDir            string
+	allowedExtensions []string
+	allowNoExt        bool
 }
 
 // NNewHTTPFormImpl creates and returns the form implementation of NimbusHTTP.
@@ -33,16 +52,21 @@ type NimbusHTTPFormImpl struct {
 // the name of the file field in requests to be received. `maxSize` specifies
 // the maximum supported file size and `buffSize` indicates the copy buffer
 // size. `tmpDir` is the directory in which the uploaded files will be stored
-// as temporary files.
-func NewHTTPFormImpl(dfk string, maxSize int64, buffSize int64, tmpDir string) (NimbusHTTP, error) {
+// as temporary files. `exts` is a slice containing the extensions which should
+// be permitted. `allowNoExt` specifies whether files without extensions should
+// be handled.
+func NewHTTPFormImpl(dfk string, maxSize, buffSize int64, tmpDir string,
+	exts []string, allowNoExt bool) (NimbusHTTP, error) {
 	// create tmpdir if it doesn't already exist
 	_ = os.Mkdir(tmpDir, 0755)
 	return &NimbusHTTPFormImpl{
-		maxSize:   maxSize,
-		tBuffSize: buffSize,
-		dfk:       dfk,
-		mimeCache: make(map[string][]string),
-		tmpDir:    tmpDir,
+		maxSize:           maxSize,
+		tBuffSize:         buffSize,
+		dfk:               dfk,
+		mimeCache:         make(map[string][]string),
+		tmpDir:            tmpDir,
+		allowedExtensions: exts,
+		allowNoExt:        allowNoExt,
 	}, nil
 }
 
@@ -53,7 +77,32 @@ func (n *NimbusHTTPFormImpl) Cleanup() {
 
 func (n *NimbusHTTPFormImpl) tmpFilePath(name string) string {
 	// no need to acquire mutex since `tmpDir` never changes
-	return fmt.Sprintf("%s/%s", n.tmpDir, name)
+	return fmt.Sprintf("%s/%s", n.tmpDir, path.Base(name))
+}
+
+// isExtAllowed checks whether the extension provided is allowed to be handled
+// or not. If the error returned is nil, then the extension may be handled.
+// Otherwise, the Error() string of the returned error indicates the reason the
+// extension is not allowed.
+func (n *NimbusHTTPFormImpl) isExtAllowed(ext string) error {
+	if ext == "" && !n.allowNoExt {
+		return fmt.Errorf("no-extension files not permitted")
+	} else {
+		if len(n.allowedExtensions) == 1 && n.allowedExtensions[0] == "_all_" {
+			return nil // all extensions are allowed
+		}
+		var allowed bool
+		for _, e := range n.allowedExtensions {
+			if ext == e {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("file extension not permitted")
+		}
+		return nil
+	}
 }
 
 // write is a helper which writes the contents of the file `f` to the writer `w`
@@ -78,7 +127,10 @@ func write(f multipart.File, w io.Writer, buffSize int64) error {
 // the part of the filename from the first character after the last '.' to the
 // end of the filename. This substring is required to be non-empty.
 func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
-	r.ParseMultipartForm(n.maxSize)
+	if err := r.ParseMultipartForm(n.maxSize); err != nil {
+		http.Error(w, "error parsing form", http.StatusBadRequest)
+		return
+	}
 	uploaded, hdr, err := r.FormFile(n.dfk)
 	if err != nil {
 		http.Error(w, "failed to obtain file from request", http.StatusBadRequest)
@@ -86,14 +138,11 @@ func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer uploaded.Close()
 
-	var fExt string
-	{
-		lastDotIdx := strings.LastIndex(hdr.Filename, ".")
-		if lastDotIdx == -1 || lastDotIdx == len(hdr.Filename) {
-			http.Error(w, "cannot determine filename extension", http.StatusBadRequest)
-			return
-		}
-		fExt = hdr.Filename[lastDotIdx:]
+	fExt := filepath.Ext(hdr.Filename)
+	log.Println(fExt)
+	if err := n.isExtAllowed(fExt); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	n.mu.RLock()
@@ -126,10 +175,10 @@ func (n *NimbusHTTPFormImpl) Download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected file name", http.StatusBadRequest)
 		return
 	}
-	fName := path.Base(files[0]) // so that `tmpDir` cannot be escaped
-	f, err := os.Open(n.tmpFilePath(fName))
+	fName := n.tmpFilePath(files[0])
+	f, err := os.Open(fName)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("cannot open: %s", fName), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("cannot open: %s", path.Base(fName)), http.StatusBadRequest)
 		return
 	}
 	// set headers as they were when the file was uploaded (obtain mu for reading)
@@ -139,7 +188,7 @@ func (n *NimbusHTTPFormImpl) Download(w http.ResponseWriter, r *http.Request) {
 	}
 	n.mu.RUnlock()
 	if err := write(f, w, n.tBuffSize); err != nil {
-		http.Error(w, fmt.Sprintf("cannot write: %s", fName), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("cannot write: %s", path.Base(fName)), http.StatusInternalServerError)
 		return
 	}
 }
@@ -158,13 +207,13 @@ func (n *NimbusHTTPFormImpl) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected file name", http.StatusBadRequest)
 		return
 	}
-	fName := path.Base(files[0])
+	fName := n.tmpFilePath(files[0])
 	err := os.Remove(n.tmpFilePath(fName))
 	if err != nil {
 		http.Error(w, "failed to delete file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	n.mu.Lock()
-	delete(n.mimeCache, files[0])
+	delete(n.mimeCache, path.Base(fName))
 	n.mu.Unlock()
 }
