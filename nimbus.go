@@ -10,6 +10,6 @@ type NimbusHTTP interface {
 	UploadMany(w http.ResponseWriter, r *http.Request)
 	Download(w http.ResponseWriter, r *http.Request)
 	DownloadMany(w http.ResponseWriter, r *http.Request)
-  Delete(w http.ResponseWriter, r *http.Request)
+	Delete(w http.ResponseWriter, r *http.Request)
 	Cleanup()
 }
