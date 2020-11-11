@@ -1,2 +1,4 @@
-# built binary
-nimbus
+# built binary - for example
+formdata_upload_download
+# defaulttmpdir for server
+.nimbus_tmp
