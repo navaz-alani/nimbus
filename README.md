@@ -1,7 +1,7 @@
 # Nimbus
 
-This is a simple fileserver which facilitates uploading and downloading of
-files, written in Go. For examples of how this software works, check out the
+This is a simple fileserver, written in Go, which facilitates uploading and
+downloading of files. For examples of how this software works, check out the
 `examples` directory in the project root.
 
 ## Implementation Details
