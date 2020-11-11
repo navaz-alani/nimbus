@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 
 	"github.com/gorilla/mux"
 	"github.com/navaz-alani/nimbus"
@@ -13,7 +15,17 @@ func main() {
 	impl, _ := nimbus.NewHTTPFormImpl("_file_",
 		nimbus.Mb10,
 		nimbus.DefaultTransferBuffSize,
-		".nimbus_tmp")
+		"examples/formdata_upload_download/.nimbus_tmp")
+	// handle ctrl+c and cleanup since defered cleanup call won't be run
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		for range c {
+			log.Println("interrupt: cleaning up...")
+			impl.Cleanup()
+			os.Exit(0)
+		}
+	}()
 	defer impl.Cleanup()
 
 	m := mux.NewRouter()
@@ -23,7 +35,9 @@ func main() {
 	m.Handle("/", http.FileServer(http.Dir("./examples/formdata_upload_download")))
 
 	log.Printf("Attempting to bind to: %s", addr)
-	log.Fatalln(http.ListenAndServe(addr, m))
+	if err := http.ListenAndServe(addr, m); err != nil {
+		log.Printf("Server ended with error: %s", err.Error())
+	}
 }
 
 func Configure(n nimbus.NimbusHTTP, m *mux.Router) {
