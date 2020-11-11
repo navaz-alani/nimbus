@@ -17,6 +17,25 @@
     let fileUpload = document.getElementById("file-upload");
     let uploadedFiles = document.getElementById("uploaded");
 
+    // a deletion handler which removes the upload entry from the DOM and makes
+    // a request to the backend to delete the file.
+    const deleteUpload = (upload, filename) => {
+      fetch(`/delete?_file_=${filename}`, {
+        method: "GET",
+      })
+      .then((resp) => {
+        if (resp.status != 200) {
+          alert(`An error occurred. Server says:\n${respTxt}`);
+          return;
+        }
+      })
+      .catch(async (e) => {
+        alert(`An unexpected error occurred: ${e}`);
+        return;
+      });
+      uploadedFiles.removeChild(upload);
+    }
+
     document.getElementById("upload").onclick = function(e) {
       e.preventDefault();
       // check if there are any files to upload
@@ -33,7 +52,7 @@
         body: fd,
       })
       .then(async (resp) => {
-        let newUpload = document.createElement("p");
+        let newUpload = document.createElement("div");
         let respTxt = await resp.text();
         let href = `/download?_file_=${respTxt}`;
 
@@ -45,8 +64,12 @@
         newUpload.innerHTML = `
         ${fileUpload.files[0].name} ->
           <a target="_blank" href=${href}>${respTxt}</a>
+          <button id="del-${respTxt}">Delete</button>
         `;
         uploadedFiles.appendChild(newUpload);
+        // set up upload deletion handler
+        document.getElementById(`del-${respTxt}`).onclick = () =>
+          deleteUpload(newUpload, respTxt);
       })
       .catch(async (e) => {
         alert(`An unexpected error occurred: ${e}`);

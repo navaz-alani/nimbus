@@ -20,7 +20,7 @@ const (
 // NimbusHTTPFormImpl is a NimbusHTTP implementation which handles file uploads
 // performed using HTML forms or the FormData web API.
 type NimbusHTTPFormImpl struct {
-  mu        sync.RWMutex
+	mu        sync.RWMutex
 	maxSize   int64
 	tBuffSize int64
 	dfk       string
@@ -49,6 +49,11 @@ func NewHTTPFormImpl(dfk string, maxSize int64, buffSize int64, tmpDir string) (
 func (n *NimbusHTTPFormImpl) Cleanup() {
 	// delete tmpdir (and all contents) created during initialization
 	_ = os.RemoveAll(n.tmpDir)
+}
+
+func (n *NimbusHTTPFormImpl) tmpFilePath(name string) string {
+  // no need to acquire mutex since `tmpDir` never changes
+  return fmt.Sprintf("%s/%s", n.tmpDir, name)
 }
 
 // write is a helper which writes the contents of the file `f` to the writer `w`
@@ -91,7 +96,9 @@ func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
 		fExt = hdr.Filename[lastDotIdx:]
 	}
 
-	tempFile, err := ioutil.TempFile(".nimbus_tmp", fmt.Sprintf("*%s", fExt))
+  n.mu.RLock()
+	tempFile, err := ioutil.TempFile(n.tmpDir, fmt.Sprintf("*%s", fExt))
+  n.mu.RUnlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -105,9 +112,9 @@ func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// cache hdr for this file so that it can be downloaded with the same hdr
-  n.mu.Lock()
+	n.mu.Lock()
 	n.mimeCache[tempFile.Name()] = hdr.Header["Content-Type"]
-  n.mu.Unlock()
+	n.mu.Unlock()
 	w.Write([]byte(path.Base(tempFile.Name())))
 }
 
@@ -119,17 +126,17 @@ func (n *NimbusHTTPFormImpl) Download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected file name", http.StatusBadRequest)
 		return
 	}
-	f, err := os.Open(fmt.Sprintf(".nimbus_tmp/%s", files[0]))
+	f, err := os.Open(n.tmpFilePath(files[0]))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// set headers as they were when the file was uploaded (obtain mu for reading)
-  n.mu.RLock()
+	n.mu.RLock()
 	for _, t := range n.mimeCache[files[0]] {
 		r.Header.Add("Content-Type", t)
 	}
-  n.mu.RUnlock()
+	n.mu.RUnlock()
 	if err := write(f, w, n.tBuffSize); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -142,4 +149,20 @@ func (n *NimbusHTTPFormImpl) UploadMany(w http.ResponseWriter, _ *http.Request) 
 
 func (n *NimbusHTTPFormImpl) DownloadMany(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+func (n *NimbusHTTPFormImpl) Delete(w http.ResponseWriter, r *http.Request) {
+	files := r.URL.Query()[n.dfk]
+	if len(files) == 0 {
+		http.Error(w, "expected file name", http.StatusBadRequest)
+		return
+	}
+	err := os.Remove(n.tmpFilePath(files[0]))
+	if err != nil {
+    http.Error(w, "failed to delete file: " + err.Error(), http.StatusBadRequest)
+		return
+	}
+  n.mu.Lock()
+  delete(n.mimeCache, files[0])
+  n.mu.Unlock()
 }
