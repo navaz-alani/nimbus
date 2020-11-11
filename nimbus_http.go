@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 // NimbusHTTPFormImpl is a NimbusHTTP implementation which handles file uploads
 // performed using HTML forms or the FormData web API.
 type NimbusHTTPFormImpl struct {
+  mu        sync.RWMutex
 	maxSize   int64
 	tBuffSize int64
 	dfk       string
@@ -103,7 +105,9 @@ func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// cache hdr for this file so that it can be downloaded with the same hdr
+  n.mu.Lock()
 	n.mimeCache[tempFile.Name()] = hdr.Header["Content-Type"]
+  n.mu.Unlock()
 	w.Write([]byte(path.Base(tempFile.Name())))
 }
 
@@ -120,10 +124,12 @@ func (n *NimbusHTTPFormImpl) Download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// set headers as they were when the file was uploaded
+	// set headers as they were when the file was uploaded (obtain mu for reading)
+  n.mu.RLock()
 	for _, t := range n.mimeCache[files[0]] {
 		r.Header.Add("Content-Type", t)
 	}
+  n.mu.RUnlock()
 	if err := write(f, w, n.tBuffSize); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
