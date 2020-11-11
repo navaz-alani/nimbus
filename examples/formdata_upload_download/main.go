@@ -19,8 +19,8 @@ func main() {
   m := mux.NewRouter()
   addr := "localhost:5000"
 	Configure(impl, m)
-  // avoid cors and serve index.html from same server
-	m.Handle("/", http.FileServer(http.Dir(".")))
+  // avoid cors and serve index.html file from same server
+	m.Handle("/", http.FileServer(http.Dir("./examples/formdata_upload_download")))
 
 	log.Printf("Attempting to bind to: %s", addr)
 	log.Fatalln(http.ListenAndServe(addr, m))
