@@ -34,7 +34,7 @@ type NimbusHTTPFormImpl struct {
 // as temporary files.
 func NewHTTPFormImpl(dfk string, maxSize int64, buffSize int64, tmpDir string) (NimbusHTTP, error) {
 	// create tmpdir if it doesn't already exist
-	_ = os.Mkdir(tmpDir, os.ModeDir)
+	_ = os.Mkdir(tmpDir, 0755)
 	return &NimbusHTTPFormImpl{
 		maxSize:   maxSize,
 		tBuffSize: buffSize,
