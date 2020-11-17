@@ -12,10 +12,12 @@
     </form>
     <div id="uploaded">
     </div>
+    <button id="archive-all">Download all as ZIP</button>
   </div>
   <script>
     let fileUpload = document.getElementById("file-upload");
     let uploadedFiles = document.getElementById("uploaded");
+    let uploaded = [];
 
     // a deletion handler which removes the upload entry from the DOM and makes
     // a request to the backend to delete the file.
@@ -34,6 +36,8 @@
         return;
       });
       uploadedFiles.removeChild(upload);
+      uploaded.splice(uploaded.indexOf(filename), 1);
+      console.log(uploaded);
     }
 
     document.getElementById("upload").onclick = function(e) {
@@ -51,29 +55,62 @@
         method: "POST",
         body: fd,
       })
-      .then(async (resp) => {
-        let newUpload = document.createElement("div");
-        let respTxt = await resp.text();
-        let href = `/download?_file_=${respTxt}`;
+        .then(async (resp) => {
+          let newUpload = document.createElement("div");
+          let respTxt = await resp.text();
+          let href = `/download?_file_=${respTxt}`;
 
-        if (resp.status != 200) {
-          alert(`An error occurred. Server says:\n${respTxt}`);
-          return;
-        }
+          if (resp.status != 200) {
+            alert(`An error occurred. Server says:\n${respTxt}`);
+            return;
+          }
 
-        newUpload.innerHTML = `
+          uploaded.push(respTxt);
+          newUpload.innerHTML = `
         ${fileUpload.files[0].name} ->
           <a target="_blank" href=${href}>${respTxt}</a>
           <button id="del-${respTxt}">Delete</button>
         `;
-        uploadedFiles.appendChild(newUpload);
-        // set up upload deletion handler
-        document.getElementById(`del-${respTxt}`).onclick = () =>
-          deleteUpload(newUpload, respTxt);
+          uploadedFiles.appendChild(newUpload);
+          // set up upload deletion handler
+          document.getElementById(`del-${respTxt}`).onclick = () =>
+            deleteUpload(newUpload, respTxt);
+        })
+        .catch(async (e) => {
+          alert(`An unexpected error occurred: ${e}`);
+        });
+    };
+
+    document.getElementById("archive-all").onclick = () => {
+      fetch("/download-many", {
+        method: "POST",
+        body: JSON.stringify({
+          filenames: uploaded,
+        }),
       })
-      .catch(async (e) => {
-        alert(`An unexpected error occurred: ${e}`);
-      });
+        .then(async (resp) => {
+          const reader = resp.body.getReader();
+
+          let receivedLength = 0;
+          let chunks = [];
+          while(true) {
+            const {done, value} = await reader.read();
+            if (done) {
+              break;
+            }
+            chunks.push(value);
+            receivedLength += value.length;
+          }
+
+          let a = document.createElement("a");
+          a.target = "_blank";
+          a.href = URL.createObjectURL(new Blob(chunks));
+          a.download = "archive.zip";
+          a.click();
+        })
+        .catch((e) => {
+          alert(`Error downloading archive ${e}`);
+        });
     };
   </script>
 </body>
