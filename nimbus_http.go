@@ -1,9 +1,12 @@
 package nimbus
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -74,6 +77,7 @@ func (n *NimbusHTTPFormImpl) Cleanup() {
 	_ = os.RemoveAll(n.tmpDir)
 }
 
+// get path to saved file with given name
 func (n *NimbusHTTPFormImpl) tmpFilePath(name string) string {
 	// no need to acquire mutex since `tmpDir` never changes
 	return fmt.Sprintf("%s/%s", n.tmpDir, path.Base(name))
@@ -120,49 +124,61 @@ func write(f multipart.File, w io.Writer, buffSize int64) error {
 	return nil
 }
 
-// Upload defines the endpoint which performs the download to the server.
-// A single file is expected, with the form
-// It is assumed that files will contain extensions and that the extension is
-// the part of the filename from the first character after the last '.' to the
-// end of the filename. This substring is required to be non-empty.
-func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(n.maxSize); err != nil {
-		http.Error(w, "error parsing form", http.StatusBadRequest)
-		return
-	}
-	uploaded, hdr, err := r.FormFile(n.dfk)
+type downloadedFile struct {
+	name        string
+	contentType []string
+}
+
+func (n *NimbusHTTPFormImpl) downloadFromRequest(r *http.Request, fileKey string) (*downloadedFile, error) {
+	uploaded, hdr, err := r.FormFile(fileKey)
 	if err != nil {
-		http.Error(w, "failed to obtain file from request", http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("failed to obtain file from request")
 	}
 	defer uploaded.Close()
 
 	fExt := filepath.Ext(hdr.Filename)
 	if err := n.isExtAllowed(fExt); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, err
 	}
 
 	n.mu.RLock()
 	tempFile, err := ioutil.TempFile(n.tmpDir, fmt.Sprintf("*%s", fExt))
 	n.mu.RUnlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	defer tempFile.Close()
 
 	// read file into transfer buffer and write in chunks to avoid reading the
 	// whole file at once
 	if err := write(uploaded, tempFile, n.tBuffSize); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, err
+	}
+	return &downloadedFile{
+		name:        tempFile.Name(),
+		contentType: hdr.Header["Content-Type"],
+	}, nil
+}
+
+// Upload defines the endpoint which performs the download to the server.
+// A single file is expected, with the form
+// It is assumed that files will contain extensions and that the extension is
+// the part of the filename from the last '.' to the end of the filename. This
+// substring is required to be non-empty.
+func (n *NimbusHTTPFormImpl) Upload(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(n.maxSize); err != nil {
+		http.Error(w, "error parsing form", http.StatusBadRequest)
 		return
 	}
-	// cache hdr for this file so that it can be downloaded with the same hdr
-	n.mu.Lock()
-	n.mimeCache[tempFile.Name()] = hdr.Header["Content-Type"]
-	n.mu.Unlock()
-	w.Write([]byte(path.Base(tempFile.Name())))
+	if downloadedFile, err := n.downloadFromRequest(r, n.dfk); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		// cache hdr for this file so that it can be downloaded with the same hdr
+		n.mu.Lock()
+		n.mimeCache[downloadedFile.name] = downloadedFile.contentType
+		n.mu.Unlock()
+		w.Write([]byte(path.Base(downloadedFile.name)))
+	}
 }
 
 // Download defines the endpoint which writes the first requested file from the
@@ -195,8 +211,40 @@ func (n *NimbusHTTPFormImpl) UploadMany(w http.ResponseWriter, _ *http.Request) 
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
 
-func (n *NimbusHTTPFormImpl) DownloadMany(w http.ResponseWriter, _ *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+// DownloadMany decodes a JSON body from the response with a string[] in the
+// `filenames` field which specifies which files to archive and download.
+// A zip archive is returned when all specified files exist and the archiving
+// process does not encounter any errors. Otherwise, the encountered error is
+// reported.
+func (n *NimbusHTTPFormImpl) DownloadMany(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Filenames []string `json:"filenames"`
+	}
+	// decode filenames
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Println(err)
+		http.Error(w, "failed to decode request", http.StatusBadRequest)
+		return
+	}
+	// create new zip archive
+	archiveErrStub := "failed to compile archive: "
+	archive := new(bytes.Buffer)
+	archiver := NewZipper(archive)
+	for _, filename := range req.Filenames {
+		// add to zip arhive
+		if err := archiver.AddFile(n.tmpFilePath(filename)); err != nil {
+			http.Error(w, archiveErrStub+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if err := archiver.Close(); err != nil {
+		http.Error(w, archiveErrStub+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// write archive to response
+	w.Header().Add("Content-Type", "application/zip")
+	w.Header().Add("Content-Disposition", "attachment; filename=\"archive.zip\"")
+	w.Write(archive.Bytes())
 }
 
 func (n *NimbusHTTPFormImpl) Delete(w http.ResponseWriter, r *http.Request) {
